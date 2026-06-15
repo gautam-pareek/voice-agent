@@ -1,0 +1,19 @@
+tier1:
+  stt: large-v3
+  tts: xtts-v2
+  vram_min_gb: 8
+
+tier2:
+  stt: medium
+  tts: f5-tts
+  vram_min_gb: 4
+
+tier3:
+  stt: base
+  tts: piper
+  vram_min_gb: 2
+
+tier4:
+  stt: tiny
+  tts: piper
+  vram_min_gb: 0
