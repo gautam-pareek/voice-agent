@@ -46,7 +46,55 @@ def listen(
     clipboard: bool = typer.Option(False, "--clipboard", help="Copy transcription to clipboard"),
 ) -> None:
     """Transcribe speech from microphone."""
-    typer.echo("STT not yet implemented (Phase 2).")
+    import os
+    from voice_agent.core import audio, stt
+    from voice_agent.config import settings
+
+    cfg = settings.load()
+    threshold: float = cfg["stt"]["confidence_threshold"]
+
+    def _run_once() -> None:
+        typer.echo("Listening... (speak now)", err=True)
+        audio_array, tmp_path = audio.record_until_silence()
+
+        typer.echo("Transcribing...", err=True)
+        result = stt.transcribe(
+            audio_array,
+            audio_path=tmp_path,
+            on_segment=lambda t: typer.echo(t, nl=False),
+        )
+        typer.echo()  # newline after streamed segment output
+
+        if clipboard:
+            import pyperclip
+            pyperclip.copy(result["text"])
+            typer.echo("(copied to clipboard)", err=True)
+
+        if type_:
+            import time
+            import pyautogui
+            time.sleep(0.3)  # give user time to focus the target window
+            pyautogui.typewrite(result["text"], interval=0.02)
+
+        conf = result["confidence"]
+        if conf < threshold:
+            typer.echo(f"[low confidence: {conf:.2f}]", err=True)
+            # Phase 3 will add the RL correction prompt and pending/ storage here.
+
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+    if watch:
+        typer.echo("Continuous mode — press Ctrl+C to stop.", err=True)
+        try:
+            while True:
+                _run_once()
+        except KeyboardInterrupt:
+            typer.echo("\nStopped.", err=True)
+    else:
+        _run_once()
 
 
 @app.command()
