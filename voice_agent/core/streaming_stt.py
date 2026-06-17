@@ -204,8 +204,9 @@ class StreamingRecorder:
         # Transcribes a sliding window of the last DISPLAY_WINDOW_SEC seconds.
         # - Keeps inference fast regardless of utterance length.
         # - Uses full line overwrite so corrections are always visible.
-        DISPLAY_WINDOW_SEC = 5
-        DISPLAY_WINDOW_CHUNKS = int(DISPLAY_WINDOW_SEC * SAMPLE_RATE / _VAD_CHUNK)
+        # 30-second hard cap: covers any realistic utterance while preventing runaway growth
+        # on continuous sessions. Tiny whisper on GPU handles 30s in well under 300ms.
+        DISPLAY_MAX_CHUNKS = int(30 * SAMPLE_RATE / _VAD_CHUNK)
 
         def _transcription_thread() -> None:
             last_display = ""
@@ -214,9 +215,7 @@ class StreamingRecorder:
                 if not speech_started.is_set() or not audio_frames:
                     continue
 
-                # Slide: take only the most recent N chunks so tiny stays fast
-                window = audio_frames[-DISPLAY_WINDOW_CHUNKS:]
-                audio = np.concatenate(window)
+                audio = np.concatenate(audio_frames[-DISPLAY_MAX_CHUNKS:])
                 try:
                     segs, _ = tiny.transcribe(
                         audio, language="en", beam_size=1, best_of=1, vad_filter=False
