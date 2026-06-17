@@ -48,10 +48,6 @@ def listen(
     """Transcribe speech from microphone."""
     import os
     from voice_agent.core import audio, stt
-    from voice_agent.config import settings
-
-    cfg = settings.load()
-    threshold: float = cfg["stt"]["confidence_threshold"]
 
     def _run_once() -> None:
         typer.echo("Listening... (speak now)", err=True)
@@ -76,10 +72,8 @@ def listen(
             time.sleep(0.3)  # give user time to focus the target window
             pyautogui.typewrite(result["text"], interval=0.02)
 
-        conf = result["confidence"]
-        if conf < threshold:
-            typer.echo(f"[low confidence: {conf:.2f}]", err=True)
-            # Phase 3 will add the RL correction prompt and pending/ storage here.
+        from voice_agent.learning import rl_loop
+        rl_loop.process(result, audio_array)
 
         try:
             os.unlink(tmp_path)
@@ -119,7 +113,8 @@ def status() -> None:
 @app.command()
 def retrain() -> None:
     """Manually trigger LoRA fine-tune from pending corrections."""
-    typer.echo("Trainer not yet implemented (Phase 3).")
+    from voice_agent.learning import trainer
+    trainer.run_now()
 
 
 @app.command()
