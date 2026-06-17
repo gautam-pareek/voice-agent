@@ -28,13 +28,16 @@ _DEFAULTS: dict[str, Any] = {
         "model": None,                   # whisper checkpoint, set by tier if null
         "language": "en",               # locked to English in V1
         "confidence_threshold": 0.75,   # RL correction prompt fires below this score
+        "realtime_model": "tiny",        # whisper model for streaming partials (D020)
+        "partial_update_ms": 300,        # how often partial transcripts refresh during speech
+        "streaming_skip_confidence_pass": False,  # if True, skip RL prompt after streaming finals
     },
     "tts": {
         "engine": None,                  # "xtts", "f5", or "piper" — set by tier if null
         "voice_pack": "en-ryan-medium", # default Piper voice pack for tier 3/4
     },
     "rl": {
-        "min_samples_to_train": 1,       # fine-tune runs after this many corrections (D007)
+        "min_samples_to_train": 50,      # fine-tune runs after this many corrections (D007)
         "preferred_batch_size": 50,      # soft target before triggering a scheduled retrain
         "novelty_speaker_threshold": 0.85,   # cosine similarity above this = not novel (D006)
         "novelty_semantic_threshold": 0.90,  # cosine similarity above this = not novel (D006)

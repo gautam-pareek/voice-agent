@@ -37,6 +37,9 @@ htmlcov/
 # User data (never commit voice profiles or model weights)
 ~/.voice_agent/
 
+# Logs
+*.log
+
 # OS
 .DS_Store
 Thumbs.db

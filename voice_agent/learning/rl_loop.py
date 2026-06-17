@@ -19,18 +19,29 @@ from voice_agent.config import settings
 if TYPE_CHECKING:
     from voice_agent.core.stt import TranscriptResult
 
+# Words the user can type to explicitly discard a sample (don't train on it).
+_DISCARD_WORDS = frozenset({
+    "s", "skip", "discard", "null", "none", "n", "d",
+    "delete", "nothing", "empty", "no", "nope",
+})
+
 
 def process(result: "TranscriptResult", audio: np.ndarray) -> None:
     """Decide whether to prompt for correction, then store and trigger if needed.
 
     Exits silently when:
+    - text is empty (no speech detected)
     - confidence >= threshold (D004 — model is confident, no prompt)
     - stdin is not a tty (non-interactive context: MCP/REST/pipe)
-    - user accepts the transcription as-is
+    - user accepts the transcription as-is or discards it
     - the pair is not novel (D006 — model already knows this pattern)
     """
     cfg = settings.load()
     threshold: float = cfg["stt"]["confidence_threshold"]
+
+    # Skip if nothing was heard
+    if not result["text"].strip():
+        return
 
     if result["confidence"] >= threshold:
         return
@@ -39,7 +50,11 @@ def process(result: "TranscriptResult", audio: np.ndarray) -> None:
         return
 
     predicted = result["text"]
-    correction = _prompt(predicted, result["confidence"])
+    correction, should_discard = _prompt(predicted, result["confidence"])
+
+    if should_discard:
+        _print_err("(sample discarded — not saved for training)")
+        return
 
     if correction is None:
         return  # user accepted — nothing to store
@@ -69,23 +84,50 @@ def process(result: "TranscriptResult", audio: np.ndarray) -> None:
 
 # --- internal helpers ---
 
-def _prompt(predicted: str, confidence: float) -> str | None:
-    """Show the correction prompt; return correction string or None (accepted)."""
-    _print_err(f"\n[low confidence: {confidence:.2f}]")
-    _print_err(f"Heard: '{predicted}'")
-    sys.stderr.write("Press Enter to accept, or type correction: ")
-    sys.stderr.flush()
+def _prompt(predicted: str, confidence: float) -> tuple[str | None, bool]:
+    """Show the correction prompt.
 
-    raw = sys.stdin.readline()
+    Returns (correction, should_discard):
+      correction=None, should_discard=False  → user accepted as-is
+      correction=None, should_discard=True   → user explicitly discarded
+      correction=str,  should_discard=False  → user provided a correction
+    """
+    _print_err(f"\n[low confidence: {confidence:.2f}]")
+    _print_err(f"  {predicted}")
+    _print_err("")
+    _print_err("  Enter         → accept as-is")
+    _print_err("  s + Enter     → skip (bad audio / silence / noise)")
+    _print_err("  your text...  → type the correction and press Enter")
+
+    raw = _editable_input(predicted)
     correction = raw.strip()
 
-    if not correction:
-        return None  # accepted as-is
+    if correction.lower() in _DISCARD_WORDS:
+        return None, True  # discard
 
-    if correction == predicted:
-        return None  # typed the same text — treat as acceptance
+    if not correction or correction == predicted:
+        return None, False  # accepted as-is
 
-    return correction
+    return correction, False
+
+
+def _editable_input(prefill: str) -> str:
+    """Input line pre-filled with `prefill` so the user can edit rather than retype.
+
+    Uses readline when available (Linux/macOS). Falls back to plain input on
+    Windows (user can still backspace and retype — just no arrow-key navigation).
+    """
+    try:
+        import readline as rl
+        rl.set_startup_hook(lambda: rl.insert_text(prefill))
+        try:
+            return input("> ")
+        finally:
+            rl.set_startup_hook()
+    except (ImportError, AttributeError):
+        sys.stderr.write("> ")
+        sys.stderr.flush()
+        return sys.stdin.readline()
 
 
 def _is_interactive() -> bool:

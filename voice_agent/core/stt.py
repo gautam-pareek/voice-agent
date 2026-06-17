@@ -18,8 +18,8 @@ _model_cache: dict[str, object] = {}
 class TranscriptResult(TypedDict):
     text: str
     language: str
-    confidence: float          # 0.0–1.0, exp(avg_log_prob) across all segments
-    segments: list[dict]       # [{start, end, text, avg_log_prob}, ...]
+    confidence: float          # 0.0–1.0, exp(avg_logprob) across all segments; 0.0 if no speech
+    segments: list[dict]       # [{start, end, text, avg_logprob}, ...]
     audio_path_temp: str | None  # path to WAV file written by audio.py (Phase 3 uses this)
 
 
@@ -55,20 +55,22 @@ def transcribe(
                 "start": seg.start,
                 "end": seg.end,
                 "text": seg.text,
-                "avg_log_prob": seg.avg_log_prob,
+                "avg_logprob": seg.avg_logprob,
             }
         )
         text_parts.append(seg.text)
-        log_prob_sum += seg.avg_log_prob
+        log_prob_sum += seg.avg_logprob
 
         if on_segment is not None:
             on_segment(seg.text)
 
     text = "".join(text_parts).strip()
-    seg_count = max(len(seg_dicts), 1)
-    # exp(avg_log_prob) converts a negative log-prob to a 0–1 confidence value.
-    # Typical good transcriptions have avg_log_prob around -0.1 to -0.3 → confidence 0.74–0.90.
-    confidence = float(math.exp(log_prob_sum / seg_count))
+    if not seg_dicts:
+        confidence = 0.0
+    else:
+        # exp(avg_logprob) converts a negative log-prob to a 0–1 confidence value.
+        # Typical good transcriptions have avg_logprob around -0.1 to -0.3 → confidence 0.74–0.90.
+        confidence = float(math.exp(log_prob_sum / len(seg_dicts)))
 
     return TranscriptResult(
         text=text,
@@ -97,7 +99,7 @@ def _load_model():
 
     if cache_key not in _model_cache:
         _model_cache[cache_key] = WhisperModel(
-            model_name, device=device, compute_type=compute_type
+            model_name, device=device, compute_type=compute_type, local_files_only=True
         )
 
     return _model_cache[cache_key]
@@ -116,7 +118,7 @@ def _resolve_model_params() -> tuple[str, str, str]:
     if model_name is None:
         model_name = info.recommended_stt
 
-    device = "cuda" if info.cuda_available else "cpu"
-    compute_type = "int8_float16" if info.cuda_available else "int8"
+    device = "cuda" if info.torch_ready else "cpu"
+    compute_type = "int8_float16" if info.torch_ready else "int8"
 
     return model_name, device, compute_type

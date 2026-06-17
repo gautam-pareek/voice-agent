@@ -28,6 +28,7 @@ def test_transcript_result_has_all_keys():
 def _mock_no_cuda_detect():
     info = MagicMock()
     info.cuda_available = False
+    info.torch_ready = False
     info.recommended_stt = "base"
     return info
 
@@ -82,7 +83,7 @@ def _make_mock_segment(text: str, avg_log_prob: float = -0.2) -> MagicMock:
     seg.text = text
     seg.start = 0.0
     seg.end = 1.0
-    seg.avg_log_prob = avg_log_prob
+    seg.avg_logprob = avg_log_prob
     return seg
 
 
