@@ -201,14 +201,22 @@ class StreamingRecorder:
                     stop_event.set()
 
         # --- Transcription thread (tiny model, every 300 ms) ---------------
+        # Transcribes a sliding window of the last DISPLAY_WINDOW_SEC seconds.
+        # - Keeps inference fast regardless of utterance length.
+        # - Uses full line overwrite so corrections are always visible.
+        DISPLAY_WINDOW_SEC = 5
+        DISPLAY_WINDOW_CHUNKS = int(DISPLAY_WINDOW_SEC * SAMPLE_RATE / _VAD_CHUNK)
+
         def _transcription_thread() -> None:
-            last_text = ""
+            last_display = ""
             while not stop_event.is_set():
                 time.sleep(0.3)
                 if not speech_started.is_set() or not audio_frames:
                     continue
 
-                audio = np.concatenate(audio_frames)
+                # Slide: take only the most recent N chunks so tiny stays fast
+                window = audio_frames[-DISPLAY_WINDOW_CHUNKS:]
+                audio = np.concatenate(window)
                 try:
                     segs, _ = tiny.transcribe(
                         audio, language="en", beam_size=1, best_of=1, vad_filter=False
@@ -217,12 +225,14 @@ class StreamingRecorder:
                 except Exception:
                     continue
 
-                if text and text != last_text:
-                    if text.startswith(last_text):
-                        new = text[len(last_text):]
-                        if new:
-                            print(new, end="", flush=True)
-                    last_text = text
+                if text and text != last_display:
+                    # Full line overwrite — always shows whisper's current best guess.
+                    # Corrections and new words both update immediately.
+                    print(f"\r\033[K{text}", end="", flush=True)
+                    last_display = text
+
+                if text:
+                    # _last_partial accumulates across windows for accurate final fallback
                     self._last_partial = text
                     self._last_partial_time = time.time()
 
