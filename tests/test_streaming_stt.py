@@ -98,6 +98,25 @@ def test_strip_stop_phrase(text, expected):
 
 
 # ---------------------------------------------------------------------------
+# _is_silent — silence detection helper
+# ---------------------------------------------------------------------------
+
+def test_is_silent_returns_true_for_zero_frames():
+    frames = [np.zeros(512, dtype=np.float32)] * 20
+    assert m._is_silent(frames, 13) is True
+
+
+def test_is_silent_returns_false_for_loud_frames():
+    frames = [np.ones(512, dtype=np.float32) * 0.5] * 20
+    assert m._is_silent(frames, 13) is False
+
+
+def test_is_silent_returns_false_when_not_enough_frames():
+    frames = [np.zeros(512, dtype=np.float32)] * 5
+    assert m._is_silent(frames, 13) is False
+
+
+# ---------------------------------------------------------------------------
 # 7. stop() is a no-op — safe to call multiple times
 # ---------------------------------------------------------------------------
 

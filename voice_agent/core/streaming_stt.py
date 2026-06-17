@@ -119,6 +119,20 @@ def _strip_stop_phrase(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Silence detection helper (used by transcription thread for phrase commits)
+# ---------------------------------------------------------------------------
+
+_SILENCE_THRESHOLD = 0.02  # float32 RMS below this = silence between phrases
+
+
+def _is_silent(frames: list[np.ndarray], n_chunks: int) -> bool:
+    if len(frames) < n_chunks:
+        return False
+    recent = np.concatenate(frames[-n_chunks:])
+    return float(np.sqrt(np.mean(recent.astype(np.float32) ** 2))) < _SILENCE_THRESHOLD
+
+
+# ---------------------------------------------------------------------------
 # StreamingRecorder
 # ---------------------------------------------------------------------------
 
@@ -201,44 +215,78 @@ class StreamingRecorder:
                     stop_event.set()
 
         # --- Transcription thread (tiny model, every 300 ms) ---------------
-        # Transcribes a sliding window of the last DISPLAY_WINDOW_SEC seconds.
-        # - Keeps inference fast regardless of utterance length.
-        # - Uses full line overwrite so corrections are always visible.
-        # 30-second hard cap: covers any realistic utterance while preventing runaway growth
-        # on continuous sessions. Tiny whisper on GPU handles 30s in well under 300ms.
-        DISPLAY_MAX_CHUNKS = int(30 * SAMPLE_RATE / _VAD_CHUNK)
+        # Confirmed-prefix pattern:
+        #   - Tiny only transcribes the CURRENT phrase window (≤ 5 s) → stays fast.
+        #   - On silence (0.4 s below RMS threshold) or overflow (> 5 s), the phrase
+        #     text is locked into confirmed_prefix and the window resets.
+        #   - Display = confirmed_prefix + current_phrase_text (grows left-to-right,
+        #     locked text is never re-edited by tiny).
+        PHRASE_WINDOW_CHUNKS  = int(5.0 * SAMPLE_RATE / _VAD_CHUNK)  # 5 s max per phrase
+        SILENCE_WINDOW_CHUNKS = int(0.4 * SAMPLE_RATE / _VAD_CHUNK)  # 0.4 s pause detection
 
         def _transcription_thread() -> None:
+            confirmed_prefix = ""
+            phrase_start_idx = 0
+            last_phrase_text = ""
             last_display = ""
+            in_pause = False
+
             while not stop_event.is_set():
                 time.sleep(0.3)
-                if not speech_started.is_set() or not audio_frames:
+                total = len(audio_frames)
+                if not speech_started.is_set() or total == 0:
                     continue
 
-                audio = np.concatenate(audio_frames[-DISPLAY_MAX_CHUNKS:])
-                try:
-                    segs, _ = tiny.transcribe(
-                        audio, language="en", beam_size=1, best_of=1, vad_filter=False
+                # 1. Detect silence (natural phrase end)
+                silent = _is_silent(audio_frames, SILENCE_WINDOW_CHUNKS)
+
+                # 2. Silence commit
+                if silent and not in_pause and last_phrase_text:
+                    confirmed_prefix = (confirmed_prefix + " " + last_phrase_text).strip()
+                    phrase_start_idx = total
+                    last_phrase_text = ""
+                    in_pause = True
+                elif not silent:
+                    in_pause = False
+
+                # 3. Overflow commit (continuous speech > 5 s without a pause)
+                if total - phrase_start_idx > PHRASE_WINDOW_CHUNKS:
+                    if last_phrase_text:
+                        confirmed_prefix = (confirmed_prefix + " " + last_phrase_text).strip()
+                    phrase_start_idx += PHRASE_WINDOW_CHUNKS  # no overlap = no duplicate words
+                    last_phrase_text = ""
+
+                # 4. Transcribe current phrase window
+                phrase_frames = audio_frames[phrase_start_idx : phrase_start_idx + PHRASE_WINDOW_CHUNKS]
+                if not phrase_frames:
+                    full_text = confirmed_prefix
+                else:
+                    audio = np.concatenate(phrase_frames)
+                    try:
+                        segs, _ = tiny.transcribe(
+                            audio, language="en", beam_size=1, best_of=1, vad_filter=False
+                        )
+                        phrase_text = "".join(s.text for s in segs).strip()
+                    except Exception:
+                        continue
+                    last_phrase_text = phrase_text
+                    full_text = (
+                        (confirmed_prefix + " " + phrase_text).strip()
+                        if confirmed_prefix
+                        else phrase_text
                     )
-                    text = "".join(s.text for s in segs).strip()
-                except Exception:
-                    continue
 
-                if text and text != last_display:
-                    # Full line overwrite — always shows whisper's current best guess.
-                    # Corrections and new words both update immediately.
-                    print(f"\r\033[K{text}", end="", flush=True)
-                    last_display = text
+                # 5. Display + callbacks
+                if full_text and full_text != last_display:
+                    print(f"\r\033[K{full_text}", end="", flush=True)
+                    last_display = full_text
 
-                if text:
-                    # _last_partial accumulates across windows for accurate final fallback
-                    self._last_partial = text
+                if full_text:
+                    self._last_partial = full_text
                     self._last_partial_time = time.time()
-
                     if self._on_partial is not None:
-                        self._on_partial(text)
-
-                    if _ends_with_stop_phrase(text):
+                        self._on_partial(full_text)
+                    if _ends_with_stop_phrase(full_text):
                         stop_event.set()
 
         threading.Thread(target=_vad_thread, daemon=True).start()
@@ -273,7 +321,6 @@ class StreamingRecorder:
         partial_text = _strip_stop_phrase(self._last_partial)
 
         if audio_array.size > 512:
-            print("\nFinalizing...", end="", flush=True)
             accurate_text = _transcribe_final_accurate(audio_array)
         else:
             accurate_text = ""
