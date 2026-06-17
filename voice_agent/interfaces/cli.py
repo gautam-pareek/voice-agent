@@ -19,11 +19,16 @@ def setup(
     from voice_agent.config import settings
 
     if detect:
+        from voice_agent.core.hardware import ensure_ready
+        ensure_ready()
         info = hw_detect()
         typer.echo(f"Hardware Tier:     {info.tier}")
-        typer.echo(f"CUDA available:    {info.cuda_available}")
+        typer.echo(f"GPU detected:      {info.cuda_available}")
+        typer.echo(f"GPU backend:       {info.backend}")
         typer.echo(f"VRAM:              {info.vram_gb:.1f} GB")
+        typer.echo(f"Torch ready:       {info.torch_ready}")
         typer.echo(f"CPU cores:         {info.cpu_cores}")
+        typer.echo(f"CPU threads:       {info.cpu_threads}  (used for inference)")
         typer.echo(f"RAM:               {info.ram_gb:.1f} GB")
         typer.echo(f"Recommended STT:   whisper-{info.recommended_stt}")
         typer.echo(f"Recommended TTS:   {info.recommended_tts}")
